@@ -1,0 +1,32 @@
+"""Liveness/readiness probe used by docker-compose healthchecks."""
+from __future__ import annotations
+
+from django.core.cache import cache
+from django.db import connection
+from django.http import JsonResponse
+
+
+def health_view(request):
+    checks = {"database": False, "cache": False}
+    status = 200
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+        checks["database"] = True
+    except Exception:  # noqa: BLE001 - report unhealthy, don't crash the probe
+        status = 503
+
+    try:
+        cache.set("healthcheck", "ok", timeout=5)
+        checks["cache"] = cache.get("healthcheck") == "ok"
+        if not checks["cache"]:
+            status = 503
+    except Exception:  # noqa: BLE001
+        status = 503
+
+    return JsonResponse(
+        {"status": "ok" if status == 200 else "degraded", "checks": checks},
+        status=status,
+    )

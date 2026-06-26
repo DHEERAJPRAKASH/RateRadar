@@ -1,0 +1,89 @@
+name: rateradar
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    ports:
+      - "6379:6379"
+
+  web:
+    build: ./backend
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./rates_seed.parquet:/app/rates_seed.parquet:ro
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  worker:
+    build: ./backend
+    command: celery -A config worker -l info
+    environment:
+      RUN_MIGRATIONS: "0"
+      RUN_AUTO_SEED: "0"
+    env_file: .env
+    depends_on:
+      web:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./rates_seed.parquet:/app/rates_seed.parquet:ro
+
+  beat:
+    build: ./backend
+    command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      RUN_MIGRATIONS: "0"
+      RUN_AUTO_SEED: "0"
+    env_file: .env
+    depends_on:
+      web:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    build: ./frontend
+    env_file: .env
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
+    depends_on:
+      web:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:
