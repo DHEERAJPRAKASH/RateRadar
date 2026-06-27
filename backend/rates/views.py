@@ -12,17 +12,21 @@ from __future__ import annotations
 
 import datetime as _dt
 
-from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Max
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.decorators import (
+    api_view,
+    authentication_classes,
+    permission_classes,
+)
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from common.logging import get_logger
 from ingestion.cleaning import CleanRate, clean_row
 from ingestion.loader import get_ingestion_status, ingest_records
+from rates.auth import BearerTokenAuthentication
 from rates.models import Provider, Rate, RawResponse
 from rates.pagination import DefaultPagination
 from rates.serializers import (
@@ -243,31 +247,18 @@ def ingestion_status(request) -> Response:
 
 
 @api_view(["POST"])
-@permission_classes([AllowAny])
+@authentication_classes([BearerTokenAuthentication])
+@permission_classes([IsAuthenticated])
 def ingest(request) -> Response:
     """Ingest rate data via webhook.
 
-    Bearer token authentication (static token from env). Idempotent upsert.
-    Invalid rows are quarantined in RawResponse.
+    Auth: DRF token auth with the ``Bearer`` keyword (see
+    ``rates.auth.BearerTokenAuthentication``); unauthenticated requests are
+    rejected with 401 before this body runs. Idempotent upsert. Invalid rows are
+    quarantined in RawResponse.
 
     Cache invalidation: clears rates:latest:* and rates:history:* after successful ingest.
     """
-    # Bearer token auth.
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        return Response(
-            {
-                "error": "Missing or invalid Authorization header (Bearer token required)"
-            },
-            status=status.HTTP_401_UNAUTHORIZED,
-        )
-    token = auth_header.split(" ")[1]
-    if token != settings.INGEST_API_TOKEN:
-        return Response(
-            {"error": "Invalid bearer token"},
-            status=status.HTTP_401_UNAUTHORIZED,
-        )
-
     # Validate payload.
     serializer = IngestSerializer(data=request.data)
     if not serializer.is_valid():

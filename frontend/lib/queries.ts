@@ -1,8 +1,9 @@
 // TanStack Query hooks wrapping the API client.
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  IngestRecord,
   RateFilters,
   fetchBrowse,
   fetchHistory,
@@ -10,6 +11,8 @@ import {
   fetchLatest,
   fetchMeta,
   fetchQuarantined,
+  ingestRate,
+  login,
 } from "./api";
 
 const REFRESH_MS = 60_000; // 60s auto-refresh per the brief.
@@ -58,5 +61,31 @@ export function useQuarantined(page: number) {
     queryKey: ["quarantined", page],
     queryFn: () => fetchQuarantined(page),
     refetchInterval: REFRESH_MS,
+  });
+}
+
+export function useLogin() {
+  return useMutation({
+    mutationFn: (creds: { username: string; password: string }) =>
+      login(creds.username, creds.password),
+  });
+}
+
+export function useIngest(token: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (record: IngestRecord) => {
+      if (!token) {
+        throw new Error("Not authenticated — log in first.");
+      }
+      return ingestRate(token, record);
+    },
+    onSuccess: () => {
+      // New record is now in the DB — refresh the data-driven views.
+      queryClient.invalidateQueries({ queryKey: ["browse"] });
+      queryClient.invalidateQueries({ queryKey: ["latest"] });
+      queryClient.invalidateQueries({ queryKey: ["meta"] });
+      queryClient.invalidateQueries({ queryKey: ["quarantined"] });
+    },
   });
 }

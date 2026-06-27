@@ -15,6 +15,11 @@ fi
 # (Previous behaviour: a synchronous 5000-row sample for the 2-minute rule —
 #  replaced by the async full seed so the dashboard shows the real dataset.)
 if [[ "${RUN_AUTO_SEED:-1}" == "1" ]]; then
+  # Provision the default ingest user before seeding so the dashboard can
+  # auto-login and obtain a bearer token for POST /rates/ingest.
+  echo '{"level":"INFO","logger":"entrypoint","message":"ensuring default user"}'
+  python manage.py ensure_default_user
+
   echo '{"level":"INFO","logger":"entrypoint","message":"enqueuing full seed task"}'
   python manage.py seed_data --async --path /app/rates_seed.parquet
 fi

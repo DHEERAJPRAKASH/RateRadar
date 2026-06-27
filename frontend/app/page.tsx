@@ -7,6 +7,7 @@ import { AllRatesTable } from "@/components/AllRatesTable";
 import { FilterBar, Filters } from "@/components/FilterBar";
 import { HistoryChart } from "@/components/HistoryChart";
 import { IngestionProgress } from "@/components/IngestionProgress";
+import { IngestPanel } from "@/components/IngestPanel";
 import { LatestRatesTable } from "@/components/LatestRatesTable";
 import { QuarantineTable } from "@/components/QuarantineTable";
 
@@ -38,6 +39,8 @@ export default function Dashboard() {
         </header>
 
         <IngestionProgress />
+
+        <IngestPanel />
 
         <FilterBar filters={filters} onChange={setFilters} />
 

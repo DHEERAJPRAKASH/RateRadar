@@ -195,8 +195,8 @@ def ingest_records(
         return result
 
     # Resolve providers via canonical slug cache (no per-row DB lookup).
-    provider_map = _resolve_providers(clean_list)
-    result.providers_created = len(provider_map)
+    provider_map, created_providers = _resolve_providers(clean_list)
+    result.providers_created = created_providers
 
     # Upsert RawResponse rows (both parsed and failed).
     _upsert_raw_responses(clean_list, quarantined_list)
@@ -214,14 +214,14 @@ def ingest_records(
     return result
 
 
-def _resolve_providers(clean_rates: list[CleanRate]) -> dict[str, Provider]:
+def _resolve_providers(clean_rates: list[CleanRate]) -> tuple[dict[str, Provider], int]:
     """Resolve provider slugs to Provider objects, creating missing ones.
 
-    Returns a dict mapping slug → Provider.
+    Returns a tuple of (slug → Provider map, count of newly created providers).
     """
     slugs = {r.provider_slug for r in clean_rates}
     if not slugs:
-        return {}
+        return {}, 0
     existing = {p.slug: p for p in Provider.objects.filter(slug__in=slugs)}
     to_create = []
     for slug in slugs - set(existing.keys()):
@@ -231,6 +231,7 @@ def _resolve_providers(clean_rates: list[CleanRate]) -> dict[str, Provider]:
             slug.replace("-", " ").title(),
         )
         to_create.append(Provider(slug=slug, name=name))
+    created_count = len(to_create)
     if to_create:
         Provider.objects.bulk_create(to_create, ignore_conflicts=True)
         # bulk_create(ignore_conflicts=True) does not reliably populate primary
@@ -238,7 +239,7 @@ def _resolve_providers(clean_rates: list[CleanRate]) -> dict[str, Provider]:
         # has a PK before it is attached to a Rate (else bulk_create on Rate
         # raises "unsaved related object 'provider'").
         existing = {p.slug: p for p in Provider.objects.filter(slug__in=slugs)}
-    return existing
+    return existing, created_count
 
 
 def _upsert_raw_responses(

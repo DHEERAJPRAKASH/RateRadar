@@ -32,6 +32,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     # Third-party
     "rest_framework",
+    "rest_framework.authtoken",
     "corsheaders",
     "django_celery_beat",
     # Local
@@ -129,7 +130,15 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 # Static bearer token guarding POST /rates/ingest (no external auth service).
+# Retained for backwards compatibility; the ingest endpoint now authenticates via
+# DRF token auth (see rates.auth.BearerTokenAuthentication).
 INGEST_API_TOKEN = get_required_env("INGEST_API_TOKEN")
+
+# Default user provisioned before seeding so the dashboard can auto-login and
+# obtain a bearer token for the ingest endpoint (demo convenience, no external
+# auth service). Override in production.
+DEFAULT_INGEST_USERNAME = get_env("DEFAULT_INGEST_USERNAME", "ingestor")
+DEFAULT_INGEST_PASSWORD = get_env("DEFAULT_INGEST_PASSWORD", "ingest-dev-password")
 
 # --- DRF -------------------------------------------------------------------
 REST_FRAMEWORK = {

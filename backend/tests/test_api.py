@@ -31,6 +31,21 @@ def sample_provider():
 
 
 @pytest.fixture
+def ingest_user(db):
+    from django.contrib.auth.models import User
+
+    return User.objects.create_user(username="ingestor", password="pw-12345678")
+
+
+@pytest.fixture
+def ingest_token(ingest_user):
+    from rest_framework.authtoken.models import Token
+
+    token, _ = Token.objects.get_or_create(user=ingest_user)
+    return token.key
+
+
+@pytest.fixture
 def sample_rates(sample_provider):
     """Create sample rates for testing."""
     today = _dt.date.today()
@@ -136,6 +151,48 @@ def test_rate_history_caching(client, sample_provider, sample_rates):
     assert response1.json() == response2.json()
 
 
+@pytest.mark.django_db
+def test_signup_creates_user_and_returns_token(client):
+    """POST /auth/signup creates a user and returns a usable bearer token."""
+    from django.contrib.auth.models import User
+
+    response = client.post(
+        "/auth/signup/",
+        {"username": "newuser", "password": "pw-12345678"},
+        format="json",
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["username"] == "newuser"
+    assert body["token"]
+    assert User.objects.filter(username="newuser").exists()
+
+
+@pytest.mark.django_db
+def test_login_returns_token_for_valid_credentials(client, ingest_user):
+    """POST /auth/login returns a token when credentials are valid."""
+    response = client.post(
+        "/auth/login/",
+        {"username": "ingestor", "password": "pw-12345678"},
+        format="json",
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["token"]
+    assert body["username"] == "ingestor"
+
+
+@pytest.mark.django_db
+def test_login_rejects_bad_credentials(client, ingest_user):
+    """POST /auth/login rejects an invalid password."""
+    response = client.post(
+        "/auth/login/",
+        {"username": "ingestor", "password": "wrong-password"},
+        format="json",
+    )
+    assert response.status_code == 401
+
+
 def test_ingest_missing_auth(client):
     """POST /rates/ingest requires bearer token."""
     response = client.post(
@@ -146,6 +203,7 @@ def test_ingest_missing_auth(client):
     assert response.status_code == 401
 
 
+@pytest.mark.django_db
 def test_ingest_invalid_token(client):
     """POST /rates/ingest rejects invalid bearer token."""
     response = client.post(
@@ -158,9 +216,8 @@ def test_ingest_invalid_token(client):
 
 
 @pytest.mark.django_db
-def test_ingest_success(client, sample_provider, settings):
-    """POST /rates/ingest ingests valid data and returns counts."""
-    settings.INGEST_API_TOKEN = "test-token"
+def test_ingest_success(client, sample_provider, ingest_token):
+    """POST /rates/ingest ingests valid data when given a valid bearer token."""
     payload = {
         "data": [
             {
@@ -177,7 +234,7 @@ def test_ingest_success(client, sample_provider, settings):
         "/rates/ingest/",
         payload,
         format="json",
-        HTTP_AUTHORIZATION="Bearer test-token",
+        HTTP_AUTHORIZATION=f"Bearer {ingest_token}",
     )
     assert response.status_code == 201
     data = response.json()
@@ -186,9 +243,8 @@ def test_ingest_success(client, sample_provider, settings):
 
 
 @pytest.mark.django_db
-def test_ingest_invalid_data_quarantined(client, settings):
+def test_ingest_invalid_data_quarantined(client, ingest_token):
     """POST /rates/ingest quarantines invalid rows."""
-    settings.INGEST_API_TOKEN = "test-token"
     payload = {
         "data": [
             {
@@ -205,7 +261,7 @@ def test_ingest_invalid_data_quarantined(client, settings):
         "/rates/ingest/",
         payload,
         format="json",
-        HTTP_AUTHORIZATION="Bearer test-token",
+        HTTP_AUTHORIZATION=f"Bearer {ingest_token}",
     )
     assert response.status_code == 201
     data = response.json()
@@ -334,6 +390,58 @@ def test_quarantined_payload_with_date_is_json_safe():
     assert sum(result.quarantined.values()) == 1
     stored = RawResponse.objects.get(status=RawResponse.Status.FAILED)
     assert stored.payload["effective_date"] == _dt.date.today().isoformat()
+
+
+@pytest.mark.django_db
+def test_ingest_existing_provider_reports_zero_providers_created(
+    client, sample_provider, ingest_token
+):
+    """providers_created counts only new Provider rows, not ones already in DB."""
+    payload = {
+        "data": [
+            {
+                "provider": "test-bank",
+                "rate_type": "savings_1yr_fixed",
+                "rate_value": 4.7,
+                "currency": "USD",
+                "effective_date": _dt.date.today().isoformat(),
+                "ingestion_ts": _dt.datetime.now().isoformat(),
+            }
+        ]
+    }
+    response = client.post(
+        "/rates/ingest/",
+        payload,
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {ingest_token}",
+    )
+    assert response.status_code == 201
+    assert response.json()["providers_created"] == 0
+
+
+@pytest.mark.django_db
+def test_ingest_new_provider_reports_one_providers_created(client, ingest_token):
+    """A provider slug not yet in the DB increments providers_created."""
+    payload = {
+        "data": [
+            {
+                "provider": "Brand New Bank",
+                "rate_type": "savings_1yr_fixed",
+                "rate_value": 4.7,
+                "currency": "USD",
+                "effective_date": _dt.date.today().isoformat(),
+                "ingestion_ts": _dt.datetime.now().isoformat(),
+            }
+        ]
+    }
+    response = client.post(
+        "/rates/ingest/",
+        payload,
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {ingest_token}",
+    )
+    assert response.status_code == 201
+    assert response.json()["providers_created"] == 1
 
 
 @pytest.mark.django_db
