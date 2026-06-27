@@ -11,7 +11,11 @@ export function IngestionProgress() {
     return null;
   }
 
-  const { state, total, processed, inserted, quarantined, error } = data;
+  const { state, total, processed, quarantined, error } = data;
+  // Older cached status payloads may predate these fields; default to 0.
+  const inserted = data.inserted ?? 0;
+  const updated = data.updated ?? 0;
+  const output = data.output ?? inserted;
 
   // Nothing meaningful to show once the dataset is loaded and not re-running.
   if (state === "idle") {
@@ -59,8 +63,12 @@ export function IngestionProgress() {
         />
       </div>
 
-      <div className="flex gap-4 mt-2 text-xs text-gray-500">
+      <div className="flex flex-wrap gap-4 mt-2 text-xs text-gray-500">
         <span>Inserted: {inserted.toLocaleString()}</span>
+        <span>Updated: {updated.toLocaleString()}</span>
+        <span className="font-medium text-gray-700">
+          Rows in table: {output.toLocaleString()}
+        </span>
         <span>Quarantined: {quarantined.toLocaleString()}</span>
         {error && <span className="text-red-600">Error: {error}</span>}
       </div>

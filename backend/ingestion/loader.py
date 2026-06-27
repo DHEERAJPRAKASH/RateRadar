@@ -33,6 +33,8 @@ def _idle_status() -> dict:
         "total": 0,
         "processed": 0,
         "inserted": 0,
+        "updated": 0,
+        "output": 0,
         "quarantined": 0,
         "started_at": None,
         "finished_at": None,
@@ -309,6 +311,13 @@ def _upsert_rates(
                 source_url=r.source_url,
             )
         )
+    if not rate_objs:
+        return
+
+    # bulk_create(update_conflicts=True) does not report which rows were inserted
+    # vs updated, so we derive it from the table-size delta: new rows are true
+    # inserts, the remaining affected rows were updates (latest-wins corrections).
+    before = Rate.objects.count()
     # Bulk upsert on natural key. Conflict resolution: update.
     # Django 5.1+ supports update_conflicts with update_fields.
     Rate.objects.bulk_create(
@@ -318,6 +327,6 @@ def _upsert_rates(
         update_fields=["rate_value", "currency", "ingestion_ts", "source_url"],
         batch_size=10_000,
     )
-    # Count inserted vs updated is approximate; we'd need to inspect the operation
-    # for exact counts. For now, we log total affected.
-    result.inserted = len(rate_objs)
+    after = Rate.objects.count()
+    result.inserted = after - before
+    result.updated = len(rate_objs) - result.inserted

@@ -337,6 +337,39 @@ def test_quarantined_payload_with_date_is_json_safe():
 
 
 @pytest.mark.django_db
+def test_ingest_records_counts_inserts_and_updates_separately(sample_provider):
+    """A first ingest of a natural key is an insert; re-ingesting the same key
+    is an update, not another insert. The counts must distinguish the two so the
+    dashboard reports the true table size instead of total upsert operations."""
+    from ingestion.cleaning import CleanRate
+    from ingestion.loader import ingest_records
+
+    today = _dt.date.today()
+    base = dict(
+        provider_slug="test-bank",
+        provider_name="Test Bank",
+        rate_type="savings_1yr_fixed",
+        currency="USD",
+        effective_date=today,
+        source_url="",
+        raw_response_id="rr-1",
+    )
+
+    first = CleanRate(rate_value=Decimal("4.5"), ingestion_ts=timezone.now(), **base)
+    result_first = ingest_records([first], [])
+    assert result_first.inserted == 1
+    assert result_first.updated == 0
+
+    second = CleanRate(rate_value=Decimal("4.6"), ingestion_ts=timezone.now(), **base)
+    result_second = ingest_records([second], [])
+    assert result_second.inserted == 0
+    assert result_second.updated == 1
+
+    # Output (true table size) is one row despite two upsert operations.
+    assert Rate.objects.count() == 1
+
+
+@pytest.mark.django_db
 def test_seed_full_data_skips_when_rates_exist(sample_provider):
     """The boot seed task is a no-op (marks complete) if data already exists."""
     from ingestion.loader import get_ingestion_status

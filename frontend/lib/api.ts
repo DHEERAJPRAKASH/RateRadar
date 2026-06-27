@@ -41,6 +41,8 @@ export interface IngestionStatus {
   total: number;
   processed: number;
   inserted: number;
+  updated: number;
+  output: number;
   quarantined: number;
   started_at: string | null;
   finished_at: string | null;
