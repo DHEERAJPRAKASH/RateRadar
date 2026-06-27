@@ -133,7 +133,7 @@ AUTH_PASSWORD_VALIDATORS = [
 # Static bearer token guarding POST /rates/ingest (no external auth service).
 # Retained for backwards compatibility; the ingest endpoint now authenticates via
 # DRF token auth (see accounts.authentication.BearerTokenAuthentication).
-INGEST_API_TOKEN = get_required_env("INGEST_API_TOKEN")
+INGEST_API_TOKEN = os.environ.get("INGEST_API_TOKEN", "")
 
 # Default user provisioned before seeding so the dashboard can auto-login and
 # obtain a bearer token for the ingest endpoint (demo convenience, no external
