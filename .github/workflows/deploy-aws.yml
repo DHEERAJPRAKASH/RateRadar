@@ -37,6 +37,9 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+      - name: Download seed data from S3
+        run: |
+          aws s3 cp s3://rateradar-seed-data/rates_seed.parquet backend/rates_seed.parquet
 
       - name: Build and push web image
         uses: docker/build-push-action@v5
