@@ -60,12 +60,93 @@ Chosen Celery + `django-celery-beat` because:
 - **Scraping:** The Celery task fetches, parses, and upserts. If the source returns the same data, the upsert is a no-op (same values).
 - **Cache invalidation:** After successful ingest, we delete the `rates:latest:all` cache key. History keys rely on TTL (60s) since pattern deletion isn't supported by Django's cache abstraction.
 
+## Boot seeding: async full seed + live progress
+
+- **Inline sample replaced by an async full seed.** `entrypoint.sh` now runs
+  `manage.py seed_data --async`, which enqueues the `seed_full_data` Celery task
+  instead of blocking boot on an inline sample. The web service comes up
+  immediately; the worker streams the full parquet in 50k-row batches.
+- **Idempotent and guarded.** `seed_full_data` returns early (marking the job
+  `complete`) if `Rate` rows already exist, so re-running `docker compose up`
+  stays fast and never double-seeds.
+- **Streaming, not full-load.** `stream_seed` uses `pyarrow.iter_batches` so the
+  ~1M rows never sit in memory at once. The same function backs both the
+  management command and the Celery task (one code path, two entry points).
+- **Live progress via a Redis status key.** Progress is published after each
+  batch to the `ingestion:status` cache key (`state`, `total`, `processed`,
+  `inserted`, `updated`, `output`, `quarantined`, timestamps, `error`). It has no
+  TTL — it is a live job marker, not a cache entry. `GET /ingestion/status`
+  exposes it and the dashboard polls it (2s while running, backing off to 15s
+  once settled) to drive the progress bar.
+
+## Read API surface: browse, quarantine, meta
+
+- **On-demand browse endpoint.** The brief asked for filtering the stored data;
+  the dashboard had no controls for it. Added `GET /rates/browse` supporting
+  `rate_type`, `provider`, and `from`/`to` date filters, served via
+  `select_related("provider")` to avoid N+1 queries.
+- **Bounded pagination everywhere.** `DefaultPagination` (`page_size=50`,
+  `max_page_size=500`) ensures browse/quarantine endpoints never return an
+  unbounded result set, even against the full ~1M-row table.
+- **Quarantine visibility.** `GET /rates/quarantined` lists `RawResponse` rows
+  with `status=FAILED` and their parse reason, so bad data is inspectable (and
+  replayable) from the UI rather than buried in logs.
+- **Filter metadata endpoint.** `GET /rates/meta` returns the distinct
+  `rate_types` and the `providers` list so the frontend can populate filter
+  dropdowns without hardcoding values or scanning the fact table client-side.
+
+## Frontend: TanStack Query + on-demand filters
+
+- **TanStack Query for server state.** A `providers.tsx` QueryClient wraps the
+  app; typed hooks in `lib/queries.ts` wrap a typed client in `lib/api.ts`.
+  Auto-refresh is 60s for rate data, with faster polling for the live seed.
+- **Filter-driven dashboard.** `FilterBar` (date range, rate type, provider)
+  feeds `AllRatesTable` (paginated browse), alongside `LatestRatesTable`,
+  `HistoryChart`, `QuarantineTable`, and `IngestionProgress`. This delivers the
+  "explore the data on demand" requirement the original UI lacked.
+- **Shared loading/error UX.** A `QueryState` wrapper standardizes
+  loading/error/empty states across components instead of repeating the logic.
+
+## Testing strategy: mocked-HTTP scraper
+
+- **No real network in tests.** `test_scraper_mock.py` uses the `responses`
+  library to intercept HTTP, asserting fetch→parse matches a known fixture and
+  that failures (timeout, 4xx, empty body, invalid JSON) surface as typed errors
+  and are quarantined — proving the worker never crashes silently, as the brief
+  requires.
+
+## Ingestion metrics: inserted vs updated vs output
+
+- **Problem.** The dashboard showed `Inserted: 464,278` while `All Rates` showed
+  only `27,434` rows, which looked like data loss. It was not. The seed reads
+  ~1M rows in 50k batches; `_dedupe_by_natural_key` only dedupes *within* a
+  batch, so the same `(provider, rate_type, effective_date)` key recurs across
+  batches and is resolved by the `bulk_create(update_conflicts=True)` upsert as
+  an **UPDATE**, not an INSERT. The old counter set
+  `result.inserted = len(rate_objs)`, counting every upsert (insert + update) as
+  an insert and summing it across batches.
+- **Fix.** `_upsert_rates` now derives real counts from the table-size delta:
+  `inserted = count(after) - count(before)` and
+  `updated = len(rate_objs) - inserted`. Django's `bulk_create(update_conflicts)`
+  does not report per-row insert/update outcomes, so the count delta is the
+  cheapest accurate signal (two `COUNT(*)` per batch; negligible at ~20 batches).
+- **Surfaced metrics.** The ingestion status now publishes three distinct
+  numbers — `inserted` (new rows), `updated` (re-ingested corrections), and
+  `output` (distinct rows now in the table) — wired through `tasks.py` and
+  rendered in `IngestionProgress`. They reconcile as
+  `upserts = inserted + updated` and `output == inserted` for a from-empty seed.
+  Example: `1,005,000 read − 231 quarantined → 464,278 upserts =
+  27,434 inserted + 436,844 updated → output 27,434`, which matches `All Rates`.
+- **Tradeoff.** The count-delta approach assumes no concurrent writers during a
+  batch. Acceptable for the single-worker seed and the serialized webhook path;
+  a concurrent ingest would skew the split (not the total).
+
 ## Assumptions made
 
 1. **Seed file schema is stable.** The parquet file has 8 columns: `provider`, `rate_type`, `rate_value`, `currency`, `effective_date`, `ingestion_ts`, `source_url`, `raw_response_id`. We assume this schema won't change during the assessment.
 2. **Single currency (USD) dominates.** The EDA showed mostly USD. We normalize to ISO codes but don't build multi-currency conversion logic.
 3. **Rate types are a small, stable set.** The EDA found ~5 types. We store them as a denormalized string rather than a dimension table to keep the 48-hour scope manageable.
-4. **Dashboard availability SLA is 2 minutes.** To meet this, the web service auto-samples 5000 rows from the seed file on startup. This provides immediate data while the full seed runs in the background.
+4. **Dashboard availability SLA is 2 minutes.** The page must be usable quickly. We now enqueue the **full** parquet seed as a background Celery task on boot (no inline sample). The page loads immediately and a progress bar polls `/ingestion/status` while the worker streams the ~1M rows. (Superseded the earlier 5000-row inline auto-sample — see "Boot seeding".)
 5. **PostgreSQL is available.** The schema uses `DISTINCT ON` and `ON CONFLICT`, which are PostgreSQL-specific. Porting to MySQL would require schema changes.
 6. **Redis is single-node.** We don't configure Redis Sentinel or clustering. For a production deployment, this would be a single point of failure.
 
@@ -76,7 +157,7 @@ Chosen Celery + `django-celery-beat` because:
 - **Parquet streaming vs full load.** Chose streaming with pyarrow to handle 1M rows without OOM. Tradeoff: more complex code than `pd.read_parquet()`, but necessary for production-scale ingestion.
 - **Cache pattern deletion vs TTL.** Django's cache abstraction doesn't support pattern deletion. We delete known keys on ingest and rely on TTL for others. Tradeoff: stale cache for some history keys after ingest, but acceptable for the 60s TTL.
 - **Static bearer token vs DRF TokenAuthentication.** Chose static token for simplicity (single webhook producer). Tradeoff: no per-user token revocation, but sufficient for the assessment scope.
-- **Auto-sample seed vs full seed on startup.** Chose auto-sample (5000 rows) to meet the 2-minute dashboard SLA. Tradeoff: dashboard shows partial data until full seed completes, but better than a 5-minute blank screen.
+- **Async full seed vs inline sample on startup.** Originally an inline 5000-row sample met the 2-minute SLA but showed partial, misleading data. Reversed to an **async full seed** (Celery) with a live progress bar: the page is usable immediately and the real ~1M-row dataset streams in the background. Tradeoff: requires the worker to be up and a status channel (Redis) to report progress, but the dashboard reflects the true dataset instead of an arbitrary sample.
 
 ## Future changes
 
@@ -88,3 +169,4 @@ Chosen Celery + `django-celery-beat` because:
 6. **Auth upgrade.** Replace the static bearer token with JWT or OAuth2 if the webhook producer needs per-client tokens or rate limiting.
 7. **Frontend SSG.** Consider static generation for the dashboard if the data changes infrequently, reducing load on the API.
 8. **Observability upgrade.** Add structured logging correlation IDs (request ID spans across services) and metrics export (Prometheus) for production monitoring.
+9. **Exact insert/update counts.** The count-delta split is accurate only without concurrent writers. For exact per-row outcomes under concurrency, switch to raw SQL `INSERT ... ON CONFLICT ... RETURNING (xmax = 0) AS inserted` and tally the flag instead of diffing `COUNT(*)`.
