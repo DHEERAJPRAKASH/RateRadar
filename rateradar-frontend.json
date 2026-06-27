@@ -14,7 +14,7 @@
         { "containerPort": 3000, "protocol": "tcp" }
       ],
       "environment": [
-        { "name": "NEXT_PUBLIC_API_BASE_URL", "value": "http://localhost:8000" }
+        { "name": "NEXT_PUBLIC_API_BASE_URL", "value": "http://rateradar-alb-1158320733.eu-north-1.elb.amazonaws.com" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
