@@ -37,6 +37,10 @@
         {
           "name": "CELERY_RESULT_BACKEND",
           "value": "redis://rateradar-redis.o7spxf.0001.eun1.cache.amazonaws.com:6379"
+        },
+        {
+          "name": "CORS_ALLOWED_ORIGINS",
+          "value": "http://rateradar-alb-1158320733.eu-north-1.elb.amazonaws.com"
         }
       ],
       "logConfiguration": {
