@@ -15,6 +15,7 @@ const PAGE_SIZE = 50;
 
 export function AllRatesTable({ filters }: Props) {
   const [page, setPage] = useState(1);
+  const [pageInput, setPageInput] = useState("");
   const query = useBrowse(filters, page);
 
   const rows = query.data?.results ?? [];
@@ -94,6 +95,43 @@ export function AllRatesTable({ filters }: Props) {
           <span className="text-gray-600">
             Page {page} of {totalPages}
           </span>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={1}
+              max={totalPages}
+              value={pageInput}
+              onChange={(e) => setPageInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const pageNum = parseInt(pageInput, 10);
+                  if (pageNum >= 1 && pageNum <= totalPages) {
+                    setPage(pageNum);
+                    setPageInput("");
+                  }
+                }
+              }}
+              placeholder="Go to"
+              className="w-20 px-2 py-1.5 border border-gray-300 rounded-md text-center"
+            />
+            <button
+              onClick={() => {
+                const pageNum = parseInt(pageInput, 10);
+                if (pageNum >= 1 && pageNum <= totalPages) {
+                  setPage(pageNum);
+                  setPageInput("");
+                }
+              }}
+              disabled={
+                !pageInput ||
+                parseInt(pageInput, 10) < 1 ||
+                parseInt(pageInput, 10) > totalPages
+              }
+              className="px-3 py-1.5 border border-gray-300 rounded-md disabled:opacity-40 hover:bg-gray-50"
+            >
+              Go
+            </button>
+          </div>
           <button
             disabled={page >= totalPages}
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
