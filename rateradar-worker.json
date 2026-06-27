@@ -1,0 +1,39 @@
+{
+  "family": "rateradar-worker",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::754955336245:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "worker",
+      "image": "754955336245.dkr.ecr.eu-north-1.amazonaws.com/rateradar-web:latest",
+      "essential": true,
+      "command": ["celery", "-A", "config", "worker", "-l", "info"],
+      "environment": [
+        { "name": "DJANGO_DEBUG", "value": "false" },
+        { "name": "DJANGO_SECRET_KEY", "value": "temp-secret-key-replace-in-production" },
+        { "name": "DJANGO_ALLOWED_HOSTS", "value": "*" },
+        { "name": "POSTGRES_HOST", "value": "rateradar-db.cdy2ekcgu0fj.eu-north-1.rds.amazonaws.com" },
+        { "name": "POSTGRES_DB", "value": "rateradar" },
+        { "name": "POSTGRES_USER", "value": "rateradar" },
+        { "name": "POSTGRES_PASSWORD", "value": "YourStrongPassword123" },
+        { "name": "RUN_MIGRATIONS", "value": "0" },
+        { "name": "RUN_AUTO_SEED", "value": "0" },
+        { "name": "REDIS_URL", "value": "redis://rateradar-redis.o7spxf.0001.eun1.cache.amazonaws.com:6379" },
+        { "name": "CELERY_BROKER_URL", "value": "redis://rateradar-redis.o7spxf.0001.eun1.cache.amazonaws.com:6379" },
+        { "name": "CELERY_RESULT_BACKEND", "value": "redis://rateradar-redis.o7spxf.0001.eun1.cache.amazonaws.com:6379" },
+        { "name": "CORS_ALLOWED_ORIGINS", "value": "http://rateradar-alb-1158320733.eu-north-1.elb.amazonaws.com" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/rateradar-worker",
+          "awslogs-region": "eu-north-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
