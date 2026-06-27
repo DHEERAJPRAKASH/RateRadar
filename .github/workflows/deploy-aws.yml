@@ -7,19 +7,19 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: eu-north-1
   ECR_REPOSITORY_WEB: rateradar-web
   ECR_REPOSITORY_FRONTEND: rateradar-frontend
   ECS_CLUSTER: rateradar
   ECS_SERVICE_WEB: rateradar-web
   ECS_SERVICE_FRONTEND: rateradar-frontend
-  ECS_TASK_DEFINITION_WEB: rateradar-web
-  ECS_TASK_DEFINITION_FRONTEND: rateradar-frontend
+  ECS_TASK_DEFINITION_WEB: rateradar-web.json
+  ECS_TASK_DEFINITION_FRONTEND: rateradar-frontend.json
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
