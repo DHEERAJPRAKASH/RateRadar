@@ -5,9 +5,19 @@ from decimal import Decimal
 
 import pytest
 from django.core.cache import cache
+from django.utils import timezone
 from rest_framework.test import APIClient
 
-from rates.models import Provider, Rate
+from rates.models import Provider, Rate, RawResponse
+
+
+@pytest.fixture(autouse=True)
+def _clear_cache():
+    """Tests share Redis with the running app; clear it so cached real
+    responses do not leak into assertions."""
+    cache.clear()
+    yield
+    cache.clear()
 
 
 @pytest.fixture
@@ -62,10 +72,8 @@ def test_latest_rates_no_filter(client, sample_rates):
     response = client.get("/rates/latest/")
     assert response.status_code == 200
     data = response.json()
-    assert (
-        len(data) == 2
-    )  # Two providers (if we had more), but here 1 provider with 2 types
-    # Actually, with one provider, we get 2 rows (one per type).
+    # DISTINCT ON (provider) returns one row per provider regardless of type.
+    assert len(data) == 1
     assert data[0]["provider_slug"] == "test-bank"
 
 
@@ -84,11 +92,11 @@ def test_latest_rates_with_type_filter(client, sample_rates):
 def test_latest_rates_caching(client, sample_rates):
     """GET /rates/latest caches the response for 60s."""
     # First call
-    response1 = client.get("/api/rates/latest/")
+    response1 = client.get("/rates/latest/")
     assert response1.status_code == 200
 
     # Second call should hit cache
-    response2 = client.get("/api/rates/latest/")
+    response2 = client.get("/rates/latest/")
     assert response2.status_code == 200
     assert response1.json() == response2.json()
 
@@ -168,7 +176,7 @@ def test_ingest_success(client, sample_provider, settings):
     response = client.post(
         "/rates/ingest/",
         payload,
-        content_type="application/json",
+        format="json",
         HTTP_AUTHORIZATION="Bearer test-token",
     )
     assert response.status_code == 201
@@ -196,10 +204,146 @@ def test_ingest_invalid_data_quarantined(client, settings):
     response = client.post(
         "/rates/ingest/",
         payload,
-        content_type="application/json",
+        format="json",
         HTTP_AUTHORIZATION="Bearer test-token",
     )
     assert response.status_code == 201
     data = response.json()
     assert "quarantined" in data
     assert "null rate_value" in str(data["quarantined"])
+
+
+# --- browse / history window / quarantine / meta / status -------------------
+
+
+def _make_rate(provider, rate_type, value, eff_date):
+    return Rate.objects.create(
+        provider=provider,
+        rate_type=rate_type,
+        rate_value=Decimal(str(value)),
+        currency="USD",
+        effective_date=eff_date,
+        ingestion_ts=timezone.now(),
+    )
+
+
+@pytest.mark.django_db
+def test_browse_rates_filters_by_type_and_is_paginated(client, sample_provider):
+    today = _dt.date.today()
+    _make_rate(sample_provider, "savings_1yr_fixed", 4.5, today)
+    _make_rate(sample_provider, "mortgage_30yr_fixed", 6.8, today)
+
+    response = client.get("/rates/browse/?rate_type=savings_1yr_fixed")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "results" in body and "count" in body
+    assert all(r["rate_type"] == "savings_1yr_fixed" for r in body["results"])
+    assert body["count"] == 1
+
+
+@pytest.mark.django_db
+def test_browse_rates_filters_by_date_window(client, sample_provider):
+    today = _dt.date.today()
+    old = today - _dt.timedelta(days=90)
+    _make_rate(sample_provider, "savings_1yr_fixed", 4.5, today)
+    _make_rate(sample_provider, "savings_1yr_fixed", 4.0, old)
+
+    response = client.get(
+        f"/rates/browse/?from={(today - _dt.timedelta(days=7)).isoformat()}"
+    )
+
+    assert response.status_code == 200
+    dates = [r["effective_date"] for r in response.json()["results"]]
+    assert today.isoformat() in dates
+    assert old.isoformat() not in dates
+
+
+@pytest.mark.django_db
+def test_history_respects_from_to_window(client, sample_provider):
+    today = _dt.date.today()
+    inside = today - _dt.timedelta(days=10)
+    outside = today - _dt.timedelta(days=200)
+    _make_rate(sample_provider, "savings_1yr_fixed", 4.5, inside)
+    _make_rate(sample_provider, "savings_1yr_fixed", 3.9, outside)
+
+    response = client.get(
+        "/rates/history/?provider=test-bank&rate_type=savings_1yr_fixed"
+        f"&from={(today - _dt.timedelta(days=30)).isoformat()}&to={today.isoformat()}"
+    )
+
+    assert response.status_code == 200
+    dates = [r["effective_date"] for r in response.json()]
+    assert inside.isoformat() in dates
+    assert outside.isoformat() not in dates
+
+
+@pytest.mark.django_db
+def test_quarantined_rows_returns_reason(client):
+    RawResponse.objects.create(
+        external_id="bad-1",
+        source_url="https://example.com/x",
+        payload={"provider": "HSBC", "rate_value": None},
+        status=RawResponse.Status.FAILED,
+        parse_error="null rate_value",
+    )
+
+    response = client.get("/rates/quarantined/")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    row = body["results"][0]
+    assert row["reason"] == "null rate_value"
+    assert row["payload"]["provider"] == "HSBC"
+
+
+@pytest.mark.django_db
+def test_rate_meta_lists_types_and_providers(client, sample_provider):
+    _make_rate(sample_provider, "savings_1yr_fixed", 4.5, _dt.date.today())
+
+    response = client.get("/rates/meta/")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "savings_1yr_fixed" in body["rate_types"]
+    assert any(p["slug"] == "test-bank" for p in body["providers"])
+
+
+def test_ingestion_status_defaults_to_idle(client):
+    response = client.get("/ingestion/status/")
+    assert response.status_code == 200
+    assert response.json()["state"] == "idle"
+
+
+@pytest.mark.django_db
+def test_quarantined_payload_with_date_is_json_safe():
+    """A quarantined parquet row carrying date/datetime objects must persist
+    (JSONField cannot serialize raw date objects)."""
+    from ingestion.cleaning import Quarantine
+    from ingestion.loader import ingest_records
+
+    raw = {
+        "provider": "HSBC",
+        "rate_value": None,
+        "effective_date": _dt.date.today(),
+        "ingestion_ts": _dt.datetime.now(),
+    }
+    result = ingest_records([], [(Quarantine("null rate_value"), raw)])
+
+    assert sum(result.quarantined.values()) == 1
+    stored = RawResponse.objects.get(status=RawResponse.Status.FAILED)
+    assert stored.payload["effective_date"] == _dt.date.today().isoformat()
+
+
+@pytest.mark.django_db
+def test_seed_full_data_skips_when_rates_exist(sample_provider):
+    """The boot seed task is a no-op (marks complete) if data already exists."""
+    from ingestion.loader import get_ingestion_status
+    from ingestion.tasks import seed_full_data
+
+    _make_rate(sample_provider, "savings_1yr_fixed", 4.5, _dt.date.today())
+
+    seed_full_data()
+
+    assert get_ingestion_status()["state"] == "complete"

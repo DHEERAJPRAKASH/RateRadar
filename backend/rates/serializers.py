@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
-from rates.models import Rate
+from rates.models import Rate, RawResponse
 
 
 class RateSerializer(serializers.ModelSerializer):
@@ -36,3 +36,14 @@ class IngestSerializer(serializers.Serializer):
         allow_empty=False,
         help_text="Array of raw rate dicts (same schema as parquet).",
     )
+
+
+class QuarantineSerializer(serializers.ModelSerializer):
+    """Read-only serializer for quarantined (failed) raw responses."""
+
+    reason = serializers.CharField(source="parse_error", read_only=True)
+
+    class Meta:
+        model = RawResponse
+        fields = ["id", "reason", "payload", "source_url", "created_at"]
+        read_only_fields = fields

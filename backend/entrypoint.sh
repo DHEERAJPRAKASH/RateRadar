@@ -8,11 +8,15 @@ if [[ "${RUN_MIGRATIONS:-1}" == "1" ]]; then
   python manage.py migrate --noinput
 fi
 
-# Auto-sample seed for fast dashboard availability (2-minute rule).
-# Sample 5000 rows (~1M total) to have data immediately available.
+# Seed the full dataset asynchronously on boot. The page loads immediately and
+# a progress bar polls /ingestion/status while the worker streams the ~1M rows.
+# Idempotent: the task skips if rates already exist, so re-`up` is fast.
+#
+# (Previous behaviour: a synchronous 5000-row sample for the 2-minute rule —
+#  replaced by the async full seed so the dashboard shows the real dataset.)
 if [[ "${RUN_AUTO_SEED:-1}" == "1" ]]; then
-  echo '{"level":"INFO","logger":"entrypoint","message":"auto-sampling seed data"}'
-  python manage.py seed_data --sample 5000 --path /app/rates_seed.parquet
+  echo '{"level":"INFO","logger":"entrypoint","message":"enqueuing full seed task"}'
+  python manage.py seed_data --async --path /app/rates_seed.parquet
 fi
 
 exec "$@"

@@ -23,3 +23,15 @@ yarn-error.log*
 *.swp
 .idea/
 .vscode/
+
+# AI agent skills & tooling (local per-developer)
+.agents/
+.clinerules/
+.cursor/
+.cursorrules
+.github/copilot-instructions.md
+.opencode/
+.windsurf/
+AGENTS.md
+skills-lock.json
+.code-review-graph/

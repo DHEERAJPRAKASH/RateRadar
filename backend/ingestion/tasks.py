@@ -6,14 +6,123 @@ parses, and upserts via the shared loader. Idempotent and observable.
 from __future__ import annotations
 
 from celery import shared_task
+from django.utils import timezone
 
 from common.logging import get_logger
+from ingestion.cleaning import CleanRate
 from ingestion.fetchers import FetchError, FetchHTTPError, FetchTimeout, HttpRateFetcher
-from ingestion.loader import ingest_records
+from ingestion.loader import (
+    get_ingestion_status,
+    ingest_records,
+    parquet_row_count,
+    set_ingestion_status,
+    stream_seed,
+)
 from ingestion.parsers import ParseError, parse_rate_payload
 from rates.models import RawResponse
 
 log = get_logger("scrape")
+seed_log = get_logger("seed")
+
+
+@shared_task(bind=True, ignore_result=True)
+def seed_full_data(self, path: str = "rates_seed.parquet", batch_size: int = 50_000) -> None:
+    """Stream the full parquet seed into the DB, publishing live progress.
+
+    Idempotent and guarded: if rates already exist, the task marks the job
+    complete and returns, so re-running ``docker compose up`` stays fast.
+    Progress is written to the ``ingestion:status`` cache key after each batch
+    so the dashboard can render a progress bar.
+    """
+    from rates.models import Rate
+
+    if Rate.objects.exists():
+        seed_log.info("seed.skip_already_seeded")
+        status = get_ingestion_status()
+        if status.get("state") != "complete":
+            status.update(state="complete", finished_at=timezone.now().isoformat())
+            set_ingestion_status(status)
+        return
+
+    try:
+        total = parquet_row_count(path)
+    except Exception as exc:  # noqa: BLE001 - file/metadata problems are surfaced via status
+        seed_log.error("seed.metadata_error", exc_info=exc, extra={"path": path})
+        set_ingestion_status(
+            {
+                "state": "error",
+                "total": 0,
+                "processed": 0,
+                "inserted": 0,
+                "quarantined": 0,
+                "started_at": timezone.now().isoformat(),
+                "finished_at": timezone.now().isoformat(),
+                "error": str(exc),
+            }
+        )
+        return
+
+    started = timezone.now().isoformat()
+    set_ingestion_status(
+        {
+            "state": "running",
+            "total": total,
+            "processed": 0,
+            "inserted": 0,
+            "quarantined": 0,
+            "started_at": started,
+            "finished_at": None,
+            "error": None,
+        }
+    )
+    seed_log.info("seed.start", extra={"path": path, "total": total})
+
+    def _publish(result, rows_read: int) -> None:
+        set_ingestion_status(
+            {
+                "state": "running",
+                "total": total,
+                "processed": rows_read,
+                "inserted": result.inserted,
+                "quarantined": sum(result.quarantined.values()),
+                "started_at": started,
+                "finished_at": None,
+                "error": None,
+            }
+        )
+
+    try:
+        result = stream_seed(path, batch_size=batch_size, progress_cb=_publish)
+    except Exception as exc:  # noqa: BLE001
+        seed_log.error("seed.error", exc_info=exc)
+        set_ingestion_status(
+            {
+                "state": "error",
+                "total": total,
+                "processed": 0,
+                "inserted": 0,
+                "quarantined": 0,
+                "started_at": started,
+                "finished_at": timezone.now().isoformat(),
+                "error": str(exc),
+            }
+        )
+        raise
+
+    summary = result.to_dict()
+    set_ingestion_status(
+        {
+            "state": "complete",
+            "total": total,
+            "processed": summary["read"],
+            "inserted": summary["inserted"],
+            "quarantined": sum(result.quarantined.values()),
+            "started_at": started,
+            "finished_at": timezone.now().isoformat(),
+            "error": None,
+        }
+    )
+    seed_log.info("seed.end", extra=summary)
 
 
 # In a real system, these would be configured via env or DB.
@@ -60,7 +169,7 @@ def scrape_rates(self) -> None:
             quarantined = []
             for row in rows:
                 cleaned = clean_row(row)
-                if isinstance(cleaned, tuple):
+                if isinstance(cleaned, CleanRate):
                     clean_rates.append(cleaned)
                 else:
                     quarantined.append((cleaned, row))

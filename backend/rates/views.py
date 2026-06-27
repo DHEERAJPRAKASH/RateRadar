@@ -21,12 +21,27 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from common.logging import get_logger
-from ingestion.cleaning import clean_row
-from ingestion.loader import ingest_records
-from rates.models import Rate
-from rates.serializers import IngestSerializer, RateSerializer
+from ingestion.cleaning import CleanRate, clean_row
+from ingestion.loader import get_ingestion_status, ingest_records
+from rates.models import Provider, Rate, RawResponse
+from rates.pagination import DefaultPagination
+from rates.serializers import (
+    IngestSerializer,
+    QuarantineSerializer,
+    RateSerializer,
+)
 
 log = get_logger("api")
+
+
+def _parse_date(value: str | None) -> _dt.date | None:
+    """Parse an ISO date string, returning None if absent/invalid."""
+    if not value:
+        return None
+    try:
+        return _dt.date.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
 
 
 @api_view(["GET"])
@@ -114,7 +129,13 @@ def rate_history(request) -> Response:
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    cache_key = f"rates:history:{provider_slug}:{rate_type}"
+    # Date window: explicit ?from=&to= override the default trailing 30 days.
+    date_to = _parse_date(request.query_params.get("to")) or _dt.date.today()
+    date_from = _parse_date(request.query_params.get("from")) or (
+        date_to - _dt.timedelta(days=30)
+    )
+
+    cache_key = f"rates:history:{provider_slug}:{rate_type}:{date_from}:{date_to}"
     cached = cache.get(cache_key)
     if cached is not None:
         log.info(
@@ -127,12 +148,11 @@ def rate_history(request) -> Response:
         )
         return Response(cached)
 
-    # Filter by provider slug (join) and rate_type, effective_date >= 30 days ago.
-    cutoff = _dt.date.today() - _dt.timedelta(days=30)
     rates = Rate.objects.filter(
         provider__slug=provider_slug,
         rate_type=rate_type,
-        effective_date__gte=cutoff,
+        effective_date__gte=date_from,
+        effective_date__lte=date_to,
     ).order_by("-effective_date", "-ingestion_ts")
 
     serializer = RateSerializer(rates, many=True)
@@ -148,6 +168,78 @@ def rate_history(request) -> Response:
         },
     )
     return Response(data)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def browse_rates(request) -> Response:
+    """Paginated browse of all rates with optional filters.
+
+    Query params (all optional):
+        rate_type (str), provider (slug), from (ISO date), to (ISO date).
+    Bounded by ``DefaultPagination`` (page_size=50, max 500) so results are
+    never unbounded.
+    """
+    qs = Rate.objects.select_related("provider").all()
+
+    rate_type = request.query_params.get("rate_type")
+    if rate_type:
+        qs = qs.filter(rate_type=rate_type)
+
+    provider_slug = request.query_params.get("provider")
+    if provider_slug:
+        qs = qs.filter(provider__slug=provider_slug)
+
+    date_from = _parse_date(request.query_params.get("from"))
+    if date_from:
+        qs = qs.filter(effective_date__gte=date_from)
+
+    date_to = _parse_date(request.query_params.get("to"))
+    if date_to:
+        qs = qs.filter(effective_date__lte=date_to)
+
+    qs = qs.order_by("-effective_date", "-ingestion_ts")
+
+    paginator = DefaultPagination()
+    page = paginator.paginate_queryset(qs, request)
+    serializer = RateSerializer(page, many=True)
+    return paginator.get_paginated_response(serializer.data)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def quarantined_rows(request) -> Response:
+    """Paginated list of quarantined (failed) raw responses with reasons."""
+    qs = RawResponse.objects.filter(
+        status=RawResponse.Status.FAILED
+    ).order_by("-created_at")
+
+    paginator = DefaultPagination()
+    page = paginator.paginate_queryset(qs, request)
+    serializer = QuarantineSerializer(page, many=True)
+    return paginator.get_paginated_response(serializer.data)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def rate_meta(request) -> Response:
+    """Distinct rate types and providers, for populating dashboard filters."""
+    rate_types = list(
+        Rate.objects.values_list("rate_type", flat=True)
+        .distinct()
+        .order_by("rate_type")
+    )
+    providers = list(
+        Provider.objects.values("slug", "name").order_by("name")
+    )
+    return Response({"rate_types": rate_types, "providers": providers})
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def ingestion_status(request) -> Response:
+    """Current ingestion job status (for the dashboard progress bar)."""
+    return Response(get_ingestion_status())
 
 
 @api_view(["POST"])
@@ -189,7 +281,7 @@ def ingest(request) -> Response:
     quarantined = []
     for row in raw_rows:
         cleaned = clean_row(row)
-        if isinstance(cleaned, tuple):
+        if isinstance(cleaned, CleanRate):
             clean_rates.append(cleaned)
         else:
             quarantined.append((cleaned, row))

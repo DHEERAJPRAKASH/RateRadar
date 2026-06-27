@@ -12,15 +12,133 @@ from __future__ import annotations
 import datetime as _dt
 from collections import Counter, defaultdict
 from decimal import Decimal
-from typing import Iterable
+from typing import Callable, Iterable
 
+import pyarrow.parquet as pq
+from django.core.cache import cache
 from django.db import transaction
 
 from common.logging import get_logger
-from ingestion.cleaning import CleanRate, Quarantine
+from ingestion.cleaning import CleanRate, Quarantine, clean_row
 from rates.models import Provider, Rate, RawResponse
 
 log = get_logger("loader")
+
+INGESTION_STATUS_KEY = "ingestion:status"
+
+
+def _idle_status() -> dict:
+    return {
+        "state": "idle",
+        "total": 0,
+        "processed": 0,
+        "inserted": 0,
+        "quarantined": 0,
+        "started_at": None,
+        "finished_at": None,
+        "error": None,
+    }
+
+
+def get_ingestion_status() -> dict:
+    """Return the current ingestion job status (idle if never run)."""
+    return cache.get(INGESTION_STATUS_KEY) or _idle_status()
+
+
+def set_ingestion_status(status: dict) -> None:
+    """Persist the ingestion job status (no TTL — it is a live job marker)."""
+    cache.set(INGESTION_STATUS_KEY, status, timeout=None)
+
+
+def parquet_row_count(path: str) -> int:
+    """Total rows in a parquet file via metadata (no full read)."""
+    return pq.ParquetFile(path).metadata.num_rows
+
+
+def _json_safe(value):
+    """Recursively convert a raw row into JSON-serializable values.
+
+    Parquet rows carry ``datetime.date``/``datetime`` and ``Decimal`` objects
+    that Django's JSONField cannot serialize. Quarantined payloads must remain
+    replayable, so we preserve the data as ISO strings rather than dropping it.
+    """
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, (_dt.date, _dt.datetime)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    return value
+
+
+def _rows_from_dict(batch_dict: dict) -> Iterable[dict]:
+    """Yield row dicts from a column-oriented batch dict."""
+    if not batch_dict:
+        return
+    keys = list(batch_dict.keys())
+    values = list(batch_dict.values())
+    for i in range(len(values[0])):
+        yield {keys[j]: values[j][i] for j in range(len(keys))}
+
+
+def stream_seed(
+    path: str,
+    *,
+    batch_size: int = 50_000,
+    limit: int | None = None,
+    sample: int | None = None,
+    dry_run: bool = False,
+    progress_cb: Callable[["IngestionResult", int], None] | None = None,
+) -> "IngestionResult":
+    """Stream a parquet file in batches, clean + upsert each row idempotently.
+
+    Shared by the ``seed_data`` command and the ``seed_full_data`` Celery task.
+    ``progress_cb(result, rows_read)`` is invoked after each batch so callers
+    can log or publish progress.
+    """
+    total_result = IngestionResult()
+    parquet_file = pq.ParquetFile(path)
+
+    if sample:
+        table = parquet_file.read()
+        if sample < len(table):
+            table = table.slice(0, sample)
+        batches: Iterable = [table.to_pydict()]
+    else:
+        batches = parquet_file.iter_batches(batch_size=batch_size)
+
+    rows_read = 0
+    for batch in batches:
+        if limit and rows_read >= limit:
+            break
+        batch_dict = batch if sample else batch.to_pydict()
+
+        clean_rates: list[CleanRate] = []
+        quarantined: list[tuple[Quarantine, dict]] = []
+        for row in _rows_from_dict(batch_dict):
+            if limit and rows_read >= limit:
+                break
+            rows_read += 1
+            result = clean_row(row)
+            if isinstance(result, CleanRate):
+                clean_rates.append(result)
+            else:
+                quarantined.append((result, row))
+
+        if clean_rates or quarantined:
+            batch_result = ingest_records(clean_rates, quarantined, dry_run=dry_run)
+            total_result.read += batch_result.read
+            total_result.inserted += batch_result.inserted
+            total_result.updated += batch_result.updated
+            total_result.providers_created += batch_result.providers_created
+            total_result.quarantined.update(batch_result.quarantined)
+
+        if progress_cb is not None:
+            progress_cb(total_result, rows_read)
+
+    return total_result
 
 
 class IngestionResult:
@@ -100,6 +218,8 @@ def _resolve_providers(clean_rates: list[CleanRate]) -> dict[str, Provider]:
     Returns a dict mapping slug → Provider.
     """
     slugs = {r.provider_slug for r in clean_rates}
+    if not slugs:
+        return {}
     existing = {p.slug: p for p in Provider.objects.filter(slug__in=slugs)}
     to_create = []
     for slug in slugs - set(existing.keys()):
@@ -110,9 +230,12 @@ def _resolve_providers(clean_rates: list[CleanRate]) -> dict[str, Provider]:
         )
         to_create.append(Provider(slug=slug, name=name))
     if to_create:
-        created = Provider.objects.bulk_create(to_create, ignore_conflicts=True)
-        for p in created:
-            existing[p.slug] = p
+        Provider.objects.bulk_create(to_create, ignore_conflicts=True)
+        # bulk_create(ignore_conflicts=True) does not reliably populate primary
+        # keys on the returned objects, so re-query to guarantee every Provider
+        # has a PK before it is attached to a Rate (else bulk_create on Rate
+        # raises "unsaved related object 'provider'").
+        existing = {p.slug: p for p in Provider.objects.filter(slug__in=slugs)}
     return existing
 
 
@@ -135,7 +258,7 @@ def _upsert_raw_responses(
             RawResponse(
                 external_id=raw.get("raw_response_id"),
                 source_url=raw.get("source_url", ""),
-                payload=raw,  # Original pre-clean row.
+                payload=_json_safe(raw),  # Original pre-clean row (JSON-safe).
                 status=RawResponse.Status.FAILED,
                 parse_error=quarantine.reason,
             )
