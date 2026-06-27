@@ -25,7 +25,19 @@
         { "name": "POSTGRES_DB", "value": "rateradar" },
         { "name": "POSTGRES_USER", "value": "rateradar" },
         { "name": "POSTGRES_PASSWORD", "value": "YourStrongPassword123" },
-        { "name": "RUN_AUTO_SEED", "value": "0" }
+        { "name": "RUN_AUTO_SEED", "value": "0" },
+        {
+          "name": "REDIS_URL",
+          "value": "redis://rateradar-redis.o7spxf.0001.eun1.cache.amazonaws.com:6379"
+        },
+        {
+          "name": "CELERY_BROKER_URL",
+          "value": "redis://rateradar-redis.o7spxf.0001.eun1.cache.amazonaws.com:6379"
+        },
+        {
+          "name": "CELERY_RESULT_BACKEND",
+          "value": "redis://rateradar-redis.o7spxf.0001.eun1.cache.amazonaws.com:6379"
+        }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
