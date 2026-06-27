@@ -20,6 +20,7 @@ parquet/HTTP source -> ingestion worker -> PostgreSQL -> DRF API (Redis cache) -
 | Ingestion    | `pyarrow` streaming parquet loader + HTTP scraper |
 | Frontend     | Next.js 14 + TailwindCSS + Recharts               |
 | Runtime      | Docker Compose, Python 3.12, Node 20              |
+| Deployment   | Docker Compose (local), AWS ECS (production)      |
 
 ## Quickstart
 
@@ -54,6 +55,7 @@ make logs         # tail all logs
 
 - `DECISIONS.md` — running log of choices, assumptions, tradeoffs, and future changes.
 - `schema.md` — database design, indexes, and the queries they serve.
+- `docs/aws-deployment.md` — comprehensive AWS ECS deployment guide with architecture diagram.
 
 ## Environment
 
@@ -94,3 +96,20 @@ docker compose exec web python manage.py seed_data --sample 1000
 # Replay failed raw responses after fixing bugs
 docker compose exec web python manage.py replay_failed --limit 100
 ```
+
+## Deployment
+
+### Local Development
+
+```bash
+make up           # start all services with Docker Compose
+```
+
+### Production (AWS ECS)
+
+See `docs/aws-deployment.md` for complete deployment guide including:
+
+- AWS resource setup (ECR, ECS, RDS, ElastiCache, ALB, S3)
+- GitHub Actions CI/CD workflow
+- Task definitions for web, frontend, worker, and beat services
+- Architecture diagram and troubleshooting guide
