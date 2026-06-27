@@ -10,7 +10,7 @@ from django.core.management.base import BaseCommand
 
 from common.logging import get_logger
 from ingestion.cleaning import clean_row
-from ingestion.loader import ingest_records
+from ingestion.services.loader import ingest_records
 from rates.models import RawResponse
 
 log = get_logger("replay")

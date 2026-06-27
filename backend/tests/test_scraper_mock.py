@@ -11,13 +11,13 @@ import pytest
 import requests
 import responses
 
-from ingestion.fetchers import (
+from ingestion.services.fetchers import (
     FetchHTTPError,
     FetchTimeout,
     HttpRateFetcher,
     PartialResponseError,
 )
-from ingestion.parsers import ParseError, parse_rate_payload
+from ingestion.services.parsers import ParseError, parse_rate_payload
 
 _SOURCE_URL = "https://example.com/rates/savings"
 
@@ -139,7 +139,7 @@ def test_parse_missing_keys_raises_parse_error():
 def test_scrape_rates_quarantines_parse_failure_without_crashing(mocker):
     """When a source returns unparseable data, scrape_rates records a FAILED
     RawResponse and does not raise (worker never crashes silently)."""
-    from ingestion import tasks
+    from ingestion.services import tasks
     from rates.models import RawResponse
 
     class _StubFetcher:
@@ -158,7 +158,7 @@ def test_scrape_rates_quarantines_parse_failure_without_crashing(mocker):
 @pytest.mark.django_db
 def test_scrape_rates_ingests_clean_rows_from_mocked_source(mocker):
     """A well-formed mocked source body flows fetch -> parse -> clean -> upsert."""
-    from ingestion import tasks
+    from ingestion.services import tasks
     from rates.models import Rate
 
     class _StubFetcher:

@@ -14,7 +14,7 @@ from django.core.management.base import BaseCommand
 from common.logging import get_logger
 
 # Re-exported for backwards compatibility (tests import it from here).
-from ingestion.loader import _rows_from_dict, stream_seed  # noqa: F401
+from ingestion.services.loader import _rows_from_dict, stream_seed  # noqa: F401
 
 log = get_logger("seed")
 
@@ -69,7 +69,7 @@ class Command(BaseCommand):
 
         if run_async:
             # Defer to the worker; entrypoint uses this for non-blocking boot seed.
-            from ingestion.tasks import seed_full_data
+            from ingestion.services.tasks import seed_full_data
 
             seed_full_data.delay(path=path, batch_size=batch_size)
             log.info("seed.enqueued", extra={"path": path})

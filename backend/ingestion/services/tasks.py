@@ -10,15 +10,15 @@ from django.utils import timezone
 
 from common.logging import get_logger
 from ingestion.cleaning import CleanRate
-from ingestion.fetchers import FetchError, FetchHTTPError, FetchTimeout, HttpRateFetcher
-from ingestion.loader import (
+from ingestion.services.fetchers import FetchError, FetchHTTPError, FetchTimeout, HttpRateFetcher
+from ingestion.services.loader import (
     get_ingestion_status,
     ingest_records,
     parquet_row_count,
     set_ingestion_status,
     stream_seed,
 )
-from ingestion.parsers import ParseError, parse_rate_payload
+from ingestion.services.parsers import ParseError, parse_rate_payload
 from rates.models import RawResponse
 
 log = get_logger("scrape")

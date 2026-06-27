@@ -11,6 +11,7 @@ python-json-logger==2.0.7
 requests==2.32.3
 gunicorn==23.0.0
 python-dotenv==1.0.1
+pydash==8.0.5
 
 # Dev / test
 pytest==8.3.4

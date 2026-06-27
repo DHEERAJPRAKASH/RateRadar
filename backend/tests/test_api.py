@@ -87,7 +87,7 @@ def test_latest_rates_no_filter(client, sample_rates):
     response = client.get("/rates/latest/")
     assert response.status_code == 200
     data = response.json()
-    # DISTINCT ON (provider) returns one row per provider regardless of type.
+    # Latest per provider returns one row per provider regardless of type.
     assert len(data) == 1
     assert data[0]["provider_slug"] == "test-bank"
 
@@ -377,7 +377,7 @@ def test_quarantined_payload_with_date_is_json_safe():
     """A quarantined parquet row carrying date/datetime objects must persist
     (JSONField cannot serialize raw date objects)."""
     from ingestion.cleaning import Quarantine
-    from ingestion.loader import ingest_records
+    from ingestion.services.loader import ingest_records
 
     raw = {
         "provider": "HSBC",
@@ -450,7 +450,7 @@ def test_ingest_records_counts_inserts_and_updates_separately(sample_provider):
     is an update, not another insert. The counts must distinguish the two so the
     dashboard reports the true table size instead of total upsert operations."""
     from ingestion.cleaning import CleanRate
-    from ingestion.loader import ingest_records
+    from ingestion.services.loader import ingest_records
 
     today = _dt.date.today()
     base = dict(
@@ -480,8 +480,8 @@ def test_ingest_records_counts_inserts_and_updates_separately(sample_provider):
 @pytest.mark.django_db
 def test_seed_full_data_skips_when_rates_exist(sample_provider):
     """The boot seed task is a no-op (marks complete) if data already exists."""
-    from ingestion.loader import get_ingestion_status
-    from ingestion.tasks import seed_full_data
+    from ingestion.services.loader import get_ingestion_status
+    from ingestion.services.tasks import seed_full_data
 
     _make_rate(sample_provider, "savings_1yr_fixed", 4.5, _dt.date.today())
 

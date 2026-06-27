@@ -8,13 +8,9 @@ token for the ingest endpoint. Credentials come from
 from __future__ import annotations
 
 from django.conf import settings
-from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand
-from rest_framework.authtoken.models import Token
 
-from common.logging import get_logger
-
-log = get_logger("auth")
+from accounts.services import AuthService
 
 
 class Command(BaseCommand):
@@ -24,16 +20,7 @@ class Command(BaseCommand):
         username = settings.DEFAULT_INGEST_USERNAME
         password = settings.DEFAULT_INGEST_PASSWORD
 
-        user, created = User.objects.get_or_create(username=username)
-        if created:
-            user.set_password(password)
-            user.save(update_fields=["password"])
-        token, _ = Token.objects.get_or_create(user=user)
-
-        log.info(
-            "auth.default_user",
-            extra={"username": username, "was_created": created},
-        )
+        created = AuthService.ensure_default_user(username, password)
         self.stdout.write(
             self.style.SUCCESS(
                 f"Default user '{username}' {'created' if created else 'present'}."

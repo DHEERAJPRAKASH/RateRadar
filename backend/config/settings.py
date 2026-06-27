@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     "django_celery_beat",
     # Local
     "common",
+    "accounts",
     "rates",
     "ingestion",
 ]
@@ -114,7 +115,7 @@ SCRAPE_INTERVAL_SECONDS = get_env("SCRAPE_INTERVAL_SECONDS", 300, cast=int)
 # Celery Beat schedule (periodic tasks).
 CELERY_BEAT_SCHEDULE = {
     "scrape-rates": {
-        "task": "ingestion.tasks.scrape_rates",
+        "task": "ingestion.services.tasks.scrape_rates",
         "schedule": SCRAPE_INTERVAL_SECONDS,
     },
 }
@@ -131,7 +132,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Static bearer token guarding POST /rates/ingest (no external auth service).
 # Retained for backwards compatibility; the ingest endpoint now authenticates via
-# DRF token auth (see rates.auth.BearerTokenAuthentication).
+# DRF token auth (see accounts.authentication.BearerTokenAuthentication).
 INGEST_API_TOKEN = get_required_env("INGEST_API_TOKEN")
 
 # Default user provisioned before seeding so the dashboard can auto-login and
