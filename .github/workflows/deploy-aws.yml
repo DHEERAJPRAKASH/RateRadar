@@ -54,6 +54,7 @@ jobs:
         with:
           context: ./frontend
           push: true
+          no-cache: true
           build-args: |
             NEXT_PUBLIC_API_BASE_URL=http://rateradar-alb-1158320733.eu-north-1.elb.amazonaws.com
           tags: |
