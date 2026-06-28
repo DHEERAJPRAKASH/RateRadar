@@ -48,7 +48,7 @@ make logs         # tail all logs
 - **Idempotent ingestion:** Seed file and webhook use the same upsert logic; re-running is safe.
 - **Data quality:** Provider canonicalization (slug), currency normalization, and quarantine of invalid rows.
 - **Observability:** Structured JSON logging, slow-query warnings (>200ms), and Celery task visibility.
-- **Fast startup:** Auto-samples 5000 rows on startup to meet the 2-minute dashboard availability SLA.
+- **Fast startup:** Streams full dataset in 50k batches with live progress bar; dashboard loads immediately while data ingests in background.
 - **Responsive dashboard:** Table + chart, 60s auto-refresh, loading/error states, mobile-friendly.
 
 ## Documentation
@@ -113,3 +113,11 @@ See `docs/aws-deployment.md` for complete deployment guide including:
 - GitHub Actions CI/CD workflow
 - Task definitions for web, frontend, worker, and beat services
 - Architecture diagram and troubleshooting guide
+
+## AI Tools Used
+
+- **Cursor IDE** - Primary development environment
+- **Using Superpowers** - Brainstorming and planning workflows
+- **Caveman** - Token compression for efficient communication
+- **RTK-TDD** - Test-driven development discipline for code
+- **code-review-graph** - Knowledge graph for codebase context and impact analysis
